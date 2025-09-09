@@ -299,14 +299,8 @@ crs-summaries/
 ├── requirements.txt                  # Runtime dependencies
 ├── requirements-dev.txt              # Development dependencies
 ├── README.md                         # This comprehensive documentation
-├── CLAUDE.md                         # Original requirements specification
-├── tests/
-│   ├── __init__.py
-│   └── test_crs_extractor.py        # Behavior-driven tests
-└── rules/                           # Coding standards (24 rule files)
-    ├── README.md
-    ├── error-handling-logging.mdc
-    ├── security-privacy.mdc
-    ├── data-validation.mdc
-    └── ... (21 more rule files)
+└── tests/
+   ├── __init__.py
+   └── test_crs_extractor.py        # Behavior-driven tests
+
 ```
