@@ -18,10 +18,10 @@ This tool processes CRS documents from the official Congress.gov API to create p
 ## Features
 
 ### Core Functionality
-- ✅ Fetches up to 250 most recent CRS documents from Congress.gov API
-- ✅ Filters to include only documents with "Active" status
-- ✅ Removes duplicates (keeps highest version for same ID + publish date)
-- ✅ Generates professionally formatted Word documents with:
+- Fetches up to 250 most recent CRS documents from Congress.gov API
+- Filters to include only documents with "Active" status
+- Removes duplicates (keeps highest version for same ID + publish date)
+- Generates professionally formatted Word documents with:
   1. **Level 2 Headings**: Report titles for easy navigation
   2. **Subheadings**: Author names and publication dates
   3. **Body Text**: 300-word summaries for each report
@@ -29,12 +29,12 @@ This tool processes CRS documents from the official Congress.gov API to create p
   5. **Proper Spacing**: Two line breaks between individual reports
 
 ### Enterprise Features
-- 🔒 **Security**: Input validation, path traversal prevention, API key protection
-- 📊 **Monitoring**: Structured logging with correlation IDs and performance metrics
-- 🛡️ **Error Handling**: Comprehensive exception handling with user-friendly messages
-- ⚡ **Performance**: Rate limiting, request timeouts, and efficient processing
-- 🧪 **Testing**: Behavior-driven tests covering real-world scenarios
-- 📝 **Documentation**: Comprehensive inline documentation and usage examples
+- **Security**: Input validation, path traversal prevention, API key protection
+- **Monitoring**: Structured logging with correlation IDs and performance metrics
+- **Error Handling**: Comprehensive exception handling with user-friendly messages
+- **Performance**: Rate limiting, request timeouts, and efficient processing
+- **Testing**: Behavior-driven tests covering real-world scenarios
+- **Documentation**: Comprehensive inline documentation and usage examples
 
 ## Installation
 
@@ -47,9 +47,9 @@ This tool processes CRS documents from the official Congress.gov API to create p
 pip3 install -r requirements.txt
 ```
 
-3. **Configure your API key** in `.gitignore/.env`:
+3. **Configure your API key** in `.env`:
 ```bash
-echo "CONGRESSGOV_API_KEY=your_actual_api_key_here" > .gitignore/.env
+echo "CONGRESSGOV_API_KEY=your_actual_api_key_here" > .env
 ```
 
 4. **Run the extractor**:
@@ -74,7 +74,7 @@ pip3 install -e .[dev]
 ### Basic Usage
 
 ```bash
-# Extract CRS summaries to default file (crs_summaries.docx)
+# Extract CRS summaries to default file (crs_summaries_YYYY-MM-DD.docx)
 python3 crs_summary_extractor.py
 
 # Specify custom output filename
@@ -94,7 +94,7 @@ python3 crs_summary_extractor.py --help
 ```
 
 **Available options:**
-- `--output, -o`: Specify output Word document filename (default: `crs_summaries.docx`)
+- `--output, -o`: Specify output Word document filename (default: `crs_summaries_YYYY-MM-DD.docx`)
 - `--verbose, -v`: Enable detailed logging for debugging
 - `--json-logs`: Output structured JSON logs for log aggregation systems
 
@@ -214,7 +214,7 @@ black --check .
 ### Common Issues
 
 **"API key not found" Error:**
-1. Verify `.gitignore/.env` file exists in the project directory
+1. Verify `.env` file exists in the project directory
 2. Check that the file contains `CONGRESSGOV_API_KEY=your_key`
 3. Ensure there are no extra spaces or quotes around the key
 4. Verify your API key is still valid at Congress.gov

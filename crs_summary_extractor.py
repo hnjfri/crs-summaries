@@ -125,7 +125,7 @@ class DataProcessingError(CRSExtractorError):
 
 
 # Load environment variables from the correct location
-load_dotenv('.gitignore/.env')
+load_dotenv('.env')
 
 class InputValidator:
     """Validates all external inputs to the system following security standards."""
@@ -146,7 +146,7 @@ class InputValidator:
         if not api_key or not isinstance(api_key, str):
             raise ConfigurationError(
                 "CONGRESSGOV_API_KEY environment variable required. "
-                "Please check your .gitignore/.env file."
+                "Please check your .env file."
             )
         
         api_key = api_key.strip()
@@ -852,7 +852,7 @@ class CRSSummaryExtractor:
             # If all parsing fails, return empty string for safety
             return ""
     
-    def create_word_document(self, reports_data: List[Dict[str, Any]], filename: str = 'crs_summaries.docx') -> None:
+    def create_word_document(self, reports_data: List[Dict[str, Any]], filename: str) -> None:
         """Create Word document with the processed data using professional formatting.
         
         Args:
@@ -1014,7 +1014,7 @@ class CRSSummaryExtractor:
             })
             raise DataProcessingError(error_msg) from e
     
-    def run(self, output_filename: str = 'crs_summaries.docx') -> None:
+    def run(self, output_filename: Optional[str] = None) -> None:
         """Main execution method with comprehensive error handling and progress tracking.
         
         This method orchestrates the complete CRS data extraction workflow:
@@ -1025,13 +1025,18 @@ class CRSSummaryExtractor:
         5. Creates formatted Word document output
         
         Args:
-            output_filename: Name of the Word document file to create
+            output_filename: Name of the Word document file to create (if None, uses date-based filename)
             
         Raises:
             ConfigurationError: If system is not properly configured
             APIError: If API communication fails critically
             DataProcessingError: If data processing fails
         """
+        # Generate filename with today's date if not provided
+        if output_filename is None:
+            today = datetime.now().strftime('%Y-%m-%d')
+            output_filename = f'crs_summaries_{today}.docx'
+        
         workflow_start_time = time.time()
         
         # User-facing messages (separate from structured logs)
@@ -1201,8 +1206,8 @@ def main() -> None:
     )
     parser.add_argument(
         '--output', '-o',
-        default='crs_summaries.docx',
-        help='Output Word document filename (default: crs_summaries.docx)'
+        default=None,
+        help='Output Word document filename (default: crs_summaries_YYYY-MM-DD.docx)'
     )
     parser.add_argument(
         '--verbose', '-v',
@@ -1230,7 +1235,7 @@ def main() -> None:
     except ConfigurationError as e:
         print(f"\n[CONFIGURATION ERROR] {e}")
         print("\nTroubleshooting:")
-        print("1. Check that your .gitignore/.env file exists")
+        print("1. Check that your .env file exists")
         print("2. Ensure it contains: CONGRESSGOV_API_KEY=your_actual_key")
         print("3. Verify your API key is valid and active")
         sys.exit(1)
