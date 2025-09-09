@@ -20,7 +20,7 @@ Trade-offs:
 - Con: Single class handles multiple responsibilities
 - Mitigation: Clear method separation and comprehensive documentation
 
-Requirements:
+Requiremen
 - Only includes documents with "status": "Active"
 - For duplicate id+publishDate combinations, keeps only the highest version number
 - Outputs Word document formatted for professional presentation

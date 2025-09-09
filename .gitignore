@@ -74,6 +74,6 @@ logs/
 rules/
 CLAUDE.md
 
-# Output files (optional - comment out if you want to track them)
-# *.docx
-# *.csv
+# Output files
+*.docx
+*.csv
