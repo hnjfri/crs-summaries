@@ -949,9 +949,8 @@ class CRSSummaryExtractor:
                         metadata_run.italic = True
                         metadata_run.font.size = Inches(0.1)  # Smaller font for metadata
                     
-                    # Add two line breaks between reports (except for the last one)
+                    # Add one line break between reports (except for the last one)
                     if i < len(reports_data) - 1:
-                        doc.add_paragraph()
                         doc.add_paragraph()
                     
                     successful_reports += 1

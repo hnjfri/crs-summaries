@@ -26,7 +26,7 @@ This tool processes CRS documents from the official Congress.gov API to create p
   2. **Subheadings**: Author names and publication dates
   3. **Body Text**: 300-word summaries for each report
   4. **Italicized Metadata**: Report IDs and URLs at the end of each summary
-  5. **Proper Spacing**: Two line breaks between individual reports
+  5. **Proper Spacing**: Single line break between individual reports
 
 ### Enterprise Features
 - **Security**: Input validation, path traversal prevention, API key protection
@@ -133,7 +133,7 @@ Each CRS report is formatted as follows:
    - Example: "Report ID: RS12345 | URL: https://www.congress.gov/crs-report/RS12345"
 
 ### Spacing and Organization
-- **Two line breaks** separate each individual report
+- **Single line break** separates each individual report
 - Professional spacing for easy reading and navigation
 - Consistent formatting throughout the document
 
