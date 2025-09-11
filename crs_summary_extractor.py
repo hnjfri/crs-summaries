@@ -321,7 +321,7 @@ class CRSSummaryExtractor:
         # - 50 requests per minute
         # - 30,000 input tokens per minute  
         # - 8,000 output tokens per minute (BOTTLENECK for 200-word summaries)
-        self.anthropic_max_concurrent = 6  # Conservative: 6 parallel requests
+        self.anthropic_max_concurrent = 4  # Reduced to 4 for better token limit compliance
         self.anthropic_requests_per_minute = 50
         
         # Rate limiting for parallel processing
@@ -788,7 +788,7 @@ class CRSSummaryExtractor:
             # Apply Anthropic-specific rate limiting
             self._anthropic_rate_limit()
             
-            prompt = f"Please rewrite the following CRS report summary in approximately {word_limit} words. Make it clear, concise, and informative while preserving all key information:\n\n{original_summary}"
+            prompt = f"Rewrite this CRS summary in {word_limit} words, keeping key information:\n\n{original_summary}"
             
             message = self.anthropic_client.messages.create(
                 model="claude-sonnet-4-20250514",
@@ -1046,6 +1046,7 @@ class CRSSummaryExtractor:
         
         total_reports = len(reports_needing_summaries)
         print(f"Generating AI summaries for {total_reports} reports using {self.anthropic_max_concurrent} parallel workers...")
+        print("Note: Processing optimized for Anthropic's 30,000 input tokens/minute limit")
         
         completed_count = 0
         
