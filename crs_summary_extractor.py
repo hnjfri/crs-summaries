@@ -44,6 +44,7 @@ from docx import Document
 from docx.shared import Inches
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from dotenv import load_dotenv
+import anthropic
 
 # Configure logging first - centralized logging setup
 def configure_logging(verbose: bool = False, json_logs: bool = False) -> logging.Logger:
@@ -286,6 +287,16 @@ class CRSSummaryExtractor:
         # Validate and set up API configuration
         raw_api_key = os.getenv('CONGRESSGOV_API_KEY')
         self.api_key = InputValidator.validate_api_key(raw_api_key)
+        
+        # Set up Anthropic API for AI-generated summaries
+        raw_anthropic_key = os.getenv('ANTHROPIC_API_KEY')
+        if raw_anthropic_key:
+            self.anthropic_client = anthropic.Anthropic(api_key=raw_anthropic_key.strip())
+            self.use_ai_summaries = True
+        else:
+            self.anthropic_client = None
+            self.use_ai_summaries = False
+            self.logger.warning("ANTHROPIC_API_KEY not found, will use original summaries")
         
         # Log successful initialization (without exposing the key)
         api_key_hash = hashlib.sha256(self.api_key.encode()).hexdigest()[:8]
@@ -724,6 +735,46 @@ class CRSSummaryExtractor:
         
         return deduplicated
     
+    def generate_ai_summary(self, original_summary: Optional[str], word_limit: int = 200) -> str:
+        """Generate AI summary using Anthropic API.
+        
+        Args:
+            original_summary: The original summary text to rewrite
+            word_limit: Target word count for the AI summary
+            
+        Returns:
+            AI-generated summary or fallback to truncated original
+        """
+        if not self.use_ai_summaries or not original_summary:
+            return self.truncate_summary(original_summary, word_limit)
+        
+        try:
+            prompt = f"Please rewrite the following CRS report summary in approximately {word_limit} words. Make it clear, concise, and informative while preserving all key information:\n\n{original_summary}"
+            
+            message = self.anthropic_client.messages.create(
+                model="claude-3-sonnet-20240229",
+                max_tokens=500,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
+            )
+            
+            ai_summary = message.content[0].text.strip()
+            
+            # Validate the AI summary isn't too long
+            words = ai_summary.split()
+            if len(words) > word_limit + 50:  # Allow some flexibility
+                ai_summary = ' '.join(words[:word_limit]) + "..."
+            
+            return ai_summary
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to generate AI summary: {e}")
+            return self.truncate_summary(original_summary, word_limit)
+    
     def truncate_summary(self, summary: Optional[str], word_limit: int = 300) -> str:
         """Truncate summary to specified word limit with safe handling.
         
@@ -852,12 +903,81 @@ class CRSSummaryExtractor:
             # If all parsing fails, return empty string for safety
             return ""
     
-    def create_word_document(self, reports_data: List[Dict[str, Any]], filename: str) -> None:
+    def format_topics(self, topics: Optional[List[Any]]) -> str:
+        """Format topics list into a readable string.
+        
+        Args:
+            topics: List of topic strings or dictionaries
+            
+        Returns:
+            Comma-separated string of topic names
+        """
+        if not topics or not isinstance(topics, list):
+            return ""
+        
+        topic_names = []
+        for topic in topics:
+            if isinstance(topic, str) and topic.strip():
+                topic_names.append(topic.strip())
+            elif isinstance(topic, dict) and 'name' in topic:
+                if isinstance(topic['name'], str) and topic['name'].strip():
+                    topic_names.append(topic['name'].strip())
+        
+        return ", ".join(topic_names)
+    
+    def organize_by_topics(self, reports_data: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Organize reports by topics, with duplicates under multiple topics.
+        
+        Args:
+            reports_data: List of report dictionaries
+            
+        Returns:
+            Dictionary mapping topic names to lists of reports
+        """
+        topic_map = {}
+        uncategorized = []
+        
+        for report in reports_data:
+            topics = report.get('topics', [])
+            if not topics:
+                uncategorized.append(report)
+                continue
+            
+            # Handle both string and list formats for topics
+            if isinstance(topics, str):
+                topic_list = [topics]
+            elif isinstance(topics, list):
+                topic_list = []
+                for topic in topics:
+                    if isinstance(topic, str):
+                        topic_list.append(topic)
+                    elif isinstance(topic, dict) and 'name' in topic:
+                        topic_list.append(topic['name'])
+            else:
+                uncategorized.append(report)
+                continue
+            
+            # Add report to each relevant topic
+            for topic in topic_list:
+                topic = topic.strip()
+                if topic:
+                    if topic not in topic_map:
+                        topic_map[topic] = []
+                    topic_map[topic].append(report)
+        
+        # Add uncategorized reports if any
+        if uncategorized:
+            topic_map['Uncategorized'] = uncategorized
+        
+        return topic_map
+    
+    def create_word_document(self, reports_data: List[Dict[str, Any]], filename: str, organize_by: str = 'date') -> None:
         """Create Word document with the processed data using professional formatting.
         
         Args:
             reports_data: List of processed report dictionaries
             filename: Output filename (must be .docx in current directory)
+            organize_by: Either 'date' or 'topic' for organization method
             
         Raises:
             ValidationError: If filename is invalid
@@ -898,71 +1018,54 @@ class CRSSummaryExtractor:
             successful_reports = 0
             failed_reports = 0
             
-            for i, data in enumerate(reports_data):
-                try:
-                    if not isinstance(data, dict):
+            if organize_by == 'topic':
+                # Organize by topics
+                topic_map = self.organize_by_topics(reports_data)
+                
+                for topic_name in sorted(topic_map.keys()):
+                    # Add topic header
+                    topic_heading = doc.add_heading(f"Topic: {topic_name}", level=1)
+                    doc.add_paragraph()  # Add spacing after topic header
+                    
+                    for i, data in enumerate(topic_map[topic_name]):
+                        try:
+                            self._add_report_to_document(doc, data)
+                            successful_reports += 1
+                        except Exception as e:
+                            failed_reports += 1
+                            self.logger.warning("Failed to add report to document", extra={
+                                'operation': 'create_document',
+                                'topic': topic_name,
+                                'report_index': i,
+                                'error': str(e),
+                                'correlation_id': self.correlation_id
+                            })
+                        
+                        # Add spacing between reports within topic
+                        if i < len(topic_map[topic_name]) - 1:
+                            doc.add_paragraph()
+                    
+                    # Add extra spacing between topics
+                    doc.add_paragraph()
+                    doc.add_paragraph()
+            else:
+                # Organize by date (default)
+                for i, data in enumerate(reports_data):
+                    try:
+                        self._add_report_to_document(doc, data)
+                        successful_reports += 1
+                    except Exception as e:
                         failed_reports += 1
-                        continue
-                    
-                    # Extract and validate data
-                    title = str(data.get('title', 'Untitled Report')).strip()
-                    authors = self.format_authors(data.get('authors'))
-                    date_published = self.format_date(data.get('publishDate'))
-                    summary = self.truncate_summary(data.get('summary'))
-                    report_id = str(data.get('id', 'Unknown ID')).strip()
-                    url = str(data.get('url', '')).strip()
-                    
-                    # Add report title as Level 2 heading
-                    if title:
-                        title_heading = doc.add_heading(title, level=2)
-                    else:
-                        title_heading = doc.add_heading('Untitled Report', level=2)
-                    
-                    # Add author and date as subheading
-                    subheading_parts = []
-                    if authors:
-                        subheading_parts.append(f"By {authors}")
-                    if date_published:
-                        subheading_parts.append(f"Published {date_published}")
-                    
-                    if subheading_parts:
-                        subheading_para = doc.add_paragraph()
-                        subheading_run = subheading_para.add_run(" | ".join(subheading_parts))
-                        subheading_run.bold = True
-                        subheading_run.font.size = Inches(0.12)  # Slightly smaller than normal
-                    
-                    # Add summary as body text
-                    if summary:
-                        summary_para = doc.add_paragraph()
-                        summary_para.add_run(summary)
-                    
-                    # Add ID and URL in italics at the end
-                    metadata_parts = []
-                    if report_id:
-                        metadata_parts.append(f"Report ID: {report_id}")
-                    if url:
-                        metadata_parts.append(f"URL: {url}")
-                    
-                    if metadata_parts:
-                        metadata_para = doc.add_paragraph()
-                        metadata_run = metadata_para.add_run(" | ".join(metadata_parts))
-                        metadata_run.italic = True
-                        metadata_run.font.size = Inches(0.1)  # Smaller font for metadata
+                        self.logger.warning("Failed to add report to document", extra={
+                            'operation': 'create_document',
+                            'report_index': i,
+                            'error': str(e),
+                            'correlation_id': self.correlation_id
+                        })
                     
                     # Add one line break between reports (except for the last one)
                     if i < len(reports_data) - 1:
                         doc.add_paragraph()
-                    
-                    successful_reports += 1
-                    
-                except Exception as e:
-                    failed_reports += 1
-                    self.logger.warning("Failed to add report to document", extra={
-                        'operation': 'create_document',
-                        'report_index': i,
-                        'error': str(e),
-                        'correlation_id': self.correlation_id
-                    })
             
             # Save the document
             doc.save(str(validated_path))
@@ -1013,7 +1116,76 @@ class CRSSummaryExtractor:
             })
             raise DataProcessingError(error_msg) from e
     
-    def run(self, output_filename: Optional[str] = None) -> None:
+    def _add_report_to_document(self, doc: Document, data: Dict[str, Any]) -> None:
+        """Add a single report to the Word document.
+        
+        Args:
+            doc: Word document object
+            data: Report data dictionary
+        """
+        if not isinstance(data, dict):
+            raise ValueError("Report data must be a dictionary")
+        
+        # Extract and validate data
+        title = str(data.get('title', 'Untitled Report')).strip()
+        authors = self.format_authors(data.get('authors'))
+        date_published = self.format_date(data.get('publishDate'))
+        topics = self.format_topics(data.get('topics'))
+        original_summary = data.get('summary')
+        report_id = str(data.get('id', 'Unknown ID')).strip()
+        url = str(data.get('url', '')).strip()
+        
+        # Generate AI summary or use truncated original
+        if self.use_ai_summaries and original_summary:
+            summary = self.generate_ai_summary(original_summary, 200)
+        else:
+            summary = self.truncate_summary(original_summary, 300)
+        
+        # Add report title as Level 2 heading
+        if title:
+            title_heading = doc.add_heading(title, level=2)
+        else:
+            title_heading = doc.add_heading('Untitled Report', level=2)
+        
+        # Add topics before the summary if available
+        if topics:
+            topics_para = doc.add_paragraph()
+            topics_run = topics_para.add_run(f"Topics: {topics}")
+            topics_run.bold = True
+            topics_run.italic = True
+        
+        # Add author and date as subheading
+        subheading_parts = []
+        if authors:
+            subheading_parts.append(f"By {authors}")
+        if date_published:
+            subheading_parts.append(f"Published {date_published}")
+        
+        if subheading_parts:
+            subheading_para = doc.add_paragraph()
+            subheading_run = subheading_para.add_run(" | ".join(subheading_parts))
+            subheading_run.bold = True
+            subheading_run.font.size = Inches(0.12)  # Slightly smaller than normal
+        
+        # Add summary as body text
+        if summary:
+            summary_para = doc.add_paragraph()
+            summary_para.add_run(summary)
+        
+        # Add ID and URL in italics at the end
+        metadata_parts = []
+        if report_id:
+            metadata_parts.append(f"Report ID: {report_id}")
+        if url:
+            metadata_parts.append(f"URL: {url}")
+        
+        if metadata_parts:
+            metadata_para = doc.add_paragraph()
+            metadata_run = metadata_para.add_run(" | ".join(metadata_parts))
+            metadata_run.italic = True
+            metadata_run.font.size = Inches(0.1)  # Smaller font for metadata
+    
+    def run(self, output_filename: Optional[str] = None, organize_by: str = 'date') -> None:
         """Main execution method with comprehensive error handling and progress tracking.
         
         This method orchestrates the complete CRS data extraction workflow:
@@ -1025,6 +1197,7 @@ class CRSSummaryExtractor:
         
         Args:
             output_filename: Name of the Word document file to create (if None, uses date-based filename)
+            organize_by: Either 'date' or 'topic' for organization method
             
         Raises:
             ConfigurationError: If system is not properly configured
@@ -1139,7 +1312,7 @@ class CRSSummaryExtractor:
             
             # Step 5: Create Word document
             print("\n[5/5] Creating Word document...")
-            self.create_word_document(detailed_reports, output_filename)
+            self.create_word_document(detailed_reports, output_filename, organize_by)
             
             # Final summary
             workflow_duration = time.time() - workflow_start_time
@@ -1222,11 +1395,22 @@ def main() -> None:
     args = parser.parse_args()
     
     try:
+        # Ask user for organization preference
+        print("How would you like to organize the CRS reports?")
+        print("  'topic' - Organize by topic with headers (reports may appear under multiple topics)")
+        print("  'date'  - Organize by date (newest first, no duplicates)")
+        
+        while True:
+            organize_choice = input("Enter 'topic' or 'date': ").strip().lower()
+            if organize_choice in ['topic', 'date']:
+                break
+            print("Please enter either 'topic' or 'date'")
+        
         # Initialize extractor with user preferences
         extractor = CRSSummaryExtractor(verbose=args.verbose, json_logs=args.json_logs)
         
         # Run the extraction process
-        extractor.run(args.output)
+        extractor.run(args.output, organize_choice)
         
         # Exit successfully
         sys.exit(0)

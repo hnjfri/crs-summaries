@@ -47,15 +47,22 @@ This tool processes CRS documents from the official Congress.gov API to create p
 pip3 install -r requirements.txt
 ```
 
-3. **Configure your API key** in `.env`:
+3. **Configure your API keys** in `.env`:
 ```bash
 echo "CONGRESSGOV_API_KEY=your_actual_api_key_here" > .env
+echo "ANTHROPIC_API_KEY=your_anthropic_api_key_here" >> .env
 ```
+
+Note: The Anthropic API key is optional. If provided, the tool will generate AI-enhanced 200-word summaries. If not provided, it will use the original CRS summaries (truncated to 300 words).
 
 4. **Run the extractor**:
 ```bash
 python3 crs_summary_extractor.py
 ```
+
+When you run the script, you'll be prompted to choose how to organize the reports:
+- **`topic`**: Organizes reports by topic with headers. Reports tagged with multiple topics will appear under each relevant topic.
+- **`date`**: Organizes reports by date (newest first, no duplicates) - this is the traditional format.
 
 ### Development Installation
 

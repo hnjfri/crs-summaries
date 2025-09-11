@@ -78,3 +78,6 @@ CLAUDE.md
 *.docx
 *.csv
 *.xlsx
+
+# Prompt development files
+PROMPTupdate.md
