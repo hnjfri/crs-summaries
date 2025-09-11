@@ -38,6 +38,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
+import concurrent.futures
+import threading
 
 import requests
 from docx import Document
@@ -313,7 +315,18 @@ class CRSSummaryExtractor:
         
         # Set up rate limiting
         self.last_request_time = 0.0
-        self.min_request_interval = 0.1  # 100ms between requests
+        self.min_request_interval = 0.05  # 50ms between requests (faster but still respectful)
+        
+        # Anthropic rate limits for Claude Sonnet 4:
+        # - 50 requests per minute
+        # - 30,000 input tokens per minute  
+        # - 8,000 output tokens per minute (BOTTLENECK for 200-word summaries)
+        self.anthropic_max_concurrent = 6  # Conservative: 6 parallel requests
+        self.anthropic_requests_per_minute = 50
+        
+        # Rate limiting for parallel processing
+        self.anthropic_request_times = []
+        self.anthropic_lock = threading.Lock()
     
     def _rate_limit(self) -> None:
         """Implement rate limiting to be respectful to the API."""
@@ -325,6 +338,28 @@ class CRSSummaryExtractor:
             time.sleep(sleep_time)
         
         self.last_request_time = time.time()
+    
+    def _anthropic_rate_limit(self) -> None:
+        """Implement rate limiting specifically for Anthropic API to stay under 50 requests/minute."""
+        current_time = time.time()
+        
+        with self.anthropic_lock:
+            # Remove requests older than 1 minute
+            self.anthropic_request_times = [
+                t for t in self.anthropic_request_times 
+                if current_time - t < 60
+            ]
+            
+            # If we're at the limit, wait until we can make another request
+            if len(self.anthropic_request_times) >= self.anthropic_requests_per_minute - 1:
+                oldest_request = min(self.anthropic_request_times)
+                wait_time = 60 - (current_time - oldest_request) + 1  # +1 for safety
+                if wait_time > 0:
+                    self.logger.info(f"Rate limiting: waiting {wait_time:.1f}s for Anthropic API")
+                    time.sleep(wait_time)
+            
+            # Record this request
+            self.anthropic_request_times.append(current_time)
     
     def _sanitize_for_logging(self, data: Any, max_length: int = 100) -> str:
         """Sanitize data for safe logging without exposing sensitive content.
@@ -750,6 +785,9 @@ class CRSSummaryExtractor:
             return self.truncate_summary(original_summary, word_limit)
         
         try:
+            # Apply Anthropic-specific rate limiting
+            self._anthropic_rate_limit()
+            
             prompt = f"Please rewrite the following CRS report summary in approximately {word_limit} words. Make it clear, concise, and informative while preserving all key information:\n\n{original_summary}"
             
             message = self.anthropic_client.messages.create(
@@ -988,6 +1026,69 @@ class CRSSummaryExtractor:
         
         return topic_map
     
+    def generate_all_summaries_parallel(self, reports_data: List[Dict[str, Any]]) -> None:
+        """Generate AI summaries for all reports in parallel, respecting rate limits.
+        
+        Args:
+            reports_data: List of report dictionaries to generate summaries for
+        """
+        if not self.use_ai_summaries:
+            return
+        
+        # Filter reports that need AI summaries
+        reports_needing_summaries = [
+            report for report in reports_data 
+            if report.get('summary') and not report.get('ai_summary_generated')
+        ]
+        
+        if not reports_needing_summaries:
+            return
+        
+        total_reports = len(reports_needing_summaries)
+        print(f"Generating AI summaries for {total_reports} reports using {self.anthropic_max_concurrent} parallel workers...")
+        
+        completed_count = 0
+        
+        def generate_summary_for_report(report: Dict[str, Any]) -> Dict[str, Any]:
+            """Generate AI summary for a single report."""
+            nonlocal completed_count
+            try:
+                ai_summary = self.generate_ai_summary(report.get('summary', ''), 200)
+                report['ai_summary'] = ai_summary
+                report['ai_summary_generated'] = True
+                
+                with self.anthropic_lock:
+                    completed_count += 1
+                    if completed_count % 5 == 0 or completed_count == total_reports:
+                        print(f"AI summaries: {completed_count}/{total_reports} completed ({(completed_count/total_reports)*100:.1f}%)")
+                
+                return report
+            except Exception as e:
+                self.logger.warning(f"Failed to generate AI summary for report: {e}")
+                report['ai_summary'] = self.truncate_summary(report.get('summary', ''), 300)
+                report['ai_summary_generated'] = False
+                return report
+        
+        # Process reports in parallel with controlled concurrency
+        start_time = time.time()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.anthropic_max_concurrent) as executor:
+            # Submit all tasks
+            futures = {
+                executor.submit(generate_summary_for_report, report): report 
+                for report in reports_needing_summaries
+            }
+            
+            # Wait for completion
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result()  # This will raise any exceptions
+                except Exception as e:
+                    self.logger.error(f"Parallel summary generation failed: {e}")
+        
+        duration = time.time() - start_time
+        success_count = sum(1 for r in reports_needing_summaries if r.get('ai_summary_generated', False))
+        print(f"AI summary generation completed in {duration:.1f}s - {success_count}/{total_reports} successful")
+    
     def create_word_document(self, reports_data: List[Dict[str, Any]], filename: str, organize_by: str = 'date') -> None:
         """Create Word document with the processed data using professional formatting.
         
@@ -1032,12 +1133,21 @@ class CRSSummaryExtractor:
             # Add spacing
             doc.add_paragraph()
             
+            # Generate all AI summaries in parallel before document creation
+            print("Step 1: Generating AI summaries in parallel...")
+            self.generate_all_summaries_parallel(reports_data)
+            
+            print("Step 2: Creating Word document with summaries...")
             successful_reports = 0
             failed_reports = 0
             
             if organize_by == 'topic':
                 # Organize by topics
                 topic_map = self.organize_by_topics(reports_data)
+                total_entries = sum(len(reports) for reports in topic_map.values())
+                processed_entries = 0
+                
+                print(f"Formatting {total_entries} entries across {len(topic_map)} topics into Word document...")
                 
                 for topic_name in sorted(topic_map.keys()):
                     # Add topic header
@@ -1046,6 +1156,10 @@ class CRSSummaryExtractor:
                     
                     for i, data in enumerate(topic_map[topic_name]):
                         try:
+                            processed_entries += 1
+                            if processed_entries % 25 == 0 or processed_entries == total_entries:
+                                print(f"Formatting entry {processed_entries}/{total_entries} - {topic_name}...")
+                            
                             self._add_report_to_document(doc, data)
                             successful_reports += 1
                         except Exception as e:
@@ -1152,12 +1266,12 @@ class CRSSummaryExtractor:
         report_id = str(data.get('id', 'Unknown ID')).strip()
         url = str(data.get('url', '')).strip()
         
-        # Generate AI summary or use truncated original
-        if self.use_ai_summaries and original_summary:
-            print(f"DEBUG: Attempting AI summary generation for report...")
+        # Use pre-generated AI summary or generate on-demand/truncate
+        if data.get('ai_summary'):
+            summary = data['ai_summary']
+        elif self.use_ai_summaries and original_summary:
             summary = self.generate_ai_summary(original_summary, 200)
         else:
-            print(f"DEBUG: Using truncated summary (AI disabled: {not self.use_ai_summaries})")
             summary = self.truncate_summary(original_summary, 300)
         
         # Add report title as Level 2 heading
