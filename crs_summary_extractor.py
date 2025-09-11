@@ -753,7 +753,7 @@ class CRSSummaryExtractor:
             prompt = f"Please rewrite the following CRS report summary in approximately {word_limit} words. Make it clear, concise, and informative while preserving all key information:\n\n{original_summary}"
             
             message = self.anthropic_client.messages.create(
-                model="claude-3-5-sonnet-latest",
+                model="claude-sonnet-4-20250514",
                 max_tokens=500,
                 messages=[
                     {
@@ -774,6 +774,7 @@ class CRSSummaryExtractor:
             
         except Exception as e:
             self.logger.warning(f"Failed to generate AI summary: {e}")
+            print(f"DEBUG: AI summary failed, falling back to truncated summary: {e}")
             return self.truncate_summary(original_summary, word_limit)
     
     def truncate_summary(self, summary: Optional[str], word_limit: int = 300) -> str:
@@ -1153,8 +1154,10 @@ class CRSSummaryExtractor:
         
         # Generate AI summary or use truncated original
         if self.use_ai_summaries and original_summary:
+            print(f"DEBUG: Attempting AI summary generation for report...")
             summary = self.generate_ai_summary(original_summary, 200)
         else:
+            print(f"DEBUG: Using truncated summary (AI disabled: {not self.use_ai_summaries})")
             summary = self.truncate_summary(original_summary, 300)
         
         # Add report title as Level 2 heading
