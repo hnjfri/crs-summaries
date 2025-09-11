@@ -290,13 +290,14 @@ class CRSSummaryExtractor:
         
         # Set up Anthropic API for AI-generated summaries
         raw_anthropic_key = os.getenv('ANTHROPIC_API_KEY')
-        if raw_anthropic_key:
+        if raw_anthropic_key and raw_anthropic_key != 'your_anthropic_api_key_here':
             self.anthropic_client = anthropic.Anthropic(api_key=raw_anthropic_key.strip())
             self.use_ai_summaries = True
+            self.logger.info("Anthropic API configured for AI summaries")
         else:
             self.anthropic_client = None
             self.use_ai_summaries = False
-            self.logger.warning("ANTHROPIC_API_KEY not found, will use original summaries")
+            self.logger.info("ANTHROPIC_API_KEY not found or placeholder, will use original summaries")
         
         # Log successful initialization (without exposing the key)
         api_key_hash = hashlib.sha256(self.api_key.encode()).hexdigest()[:8]
@@ -752,7 +753,7 @@ class CRSSummaryExtractor:
             prompt = f"Please rewrite the following CRS report summary in approximately {word_limit} words. Make it clear, concise, and informative while preserving all key information:\n\n{original_summary}"
             
             message = self.anthropic_client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-3-5-sonnet-latest",
                 max_tokens=500,
                 messages=[
                     {
@@ -919,9 +920,16 @@ class CRSSummaryExtractor:
         for topic in topics:
             if isinstance(topic, str) and topic.strip():
                 topic_names.append(topic.strip())
-            elif isinstance(topic, dict) and 'name' in topic:
-                if isinstance(topic['name'], str) and topic['name'].strip():
-                    topic_names.append(topic['name'].strip())
+            elif isinstance(topic, dict):
+                # Handle both 'name' and 'topic' keys
+                topic_name = None
+                if 'name' in topic:
+                    topic_name = topic['name']
+                elif 'topic' in topic:
+                    topic_name = topic['topic']
+                
+                if isinstance(topic_name, str) and topic_name.strip():
+                    topic_names.append(topic_name.strip())
         
         return ", ".join(topic_names)
     
@@ -937,7 +945,9 @@ class CRSSummaryExtractor:
         topic_map = {}
         uncategorized = []
         
-        for report in reports_data:
+        self.logger.info(f"Organizing {len(reports_data)} reports by topics")
+        
+        for i, report in enumerate(reports_data):
             topics = report.get('topics', [])
             if not topics:
                 uncategorized.append(report)
@@ -951,8 +961,12 @@ class CRSSummaryExtractor:
                 for topic in topics:
                     if isinstance(topic, str):
                         topic_list.append(topic)
-                    elif isinstance(topic, dict) and 'name' in topic:
-                        topic_list.append(topic['name'])
+                    elif isinstance(topic, dict):
+                        # Handle both 'name' and 'topic' keys
+                        if 'name' in topic:
+                            topic_list.append(topic['name'])
+                        elif 'topic' in topic:
+                            topic_list.append(topic['topic'])
             else:
                 uncategorized.append(report)
                 continue
@@ -968,6 +982,8 @@ class CRSSummaryExtractor:
         # Add uncategorized reports if any
         if uncategorized:
             topic_map['Uncategorized'] = uncategorized
+        
+        self.logger.info(f"Topic organization complete: {len(topic_map)} topics found, {sum(len(reports) for reports in topic_map.values())} total entries")
         
         return topic_map
     
