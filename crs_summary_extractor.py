@@ -315,13 +315,13 @@ class CRSSummaryExtractor:
         
         # Set up rate limiting
         self.last_request_time = 0.0
-        self.min_request_interval = 0.05  # 50ms between requests (faster but still respectful)
+        self.min_request_interval = 0.05  # 50ms between requests - optimal for rate limit compliance
         
         # Anthropic rate limits for Claude Sonnet 4:
         # - 50 requests per minute
         # - 30,000 input tokens per minute  
         # - 8,000 output tokens per minute (BOTTLENECK for 200-word summaries)
-        self.anthropic_max_concurrent = 4  # Reduced to 4 for better token limit compliance
+        self.anthropic_max_concurrent = 3  # Conservative: 3 parallel requests for optimal token compliance
         self.anthropic_requests_per_minute = 50
         
         # Rate limiting for parallel processing
@@ -350,10 +350,11 @@ class CRSSummaryExtractor:
                 if current_time - t < 60
             ]
             
-            # If we're at the limit, wait until we can make another request
-            if len(self.anthropic_request_times) >= self.anthropic_requests_per_minute - 1:
+            # If we're approaching the limit, wait until we can make another request
+            # Use more conservative threshold to avoid token limit issues
+            if len(self.anthropic_request_times) >= self.anthropic_requests_per_minute - 5:  # More conservative
                 oldest_request = min(self.anthropic_request_times)
-                wait_time = 60 - (current_time - oldest_request) + 1  # +1 for safety
+                wait_time = 60 - (current_time - oldest_request) + 2  # +2 for extra safety
                 if wait_time > 0:
                     self.logger.info(f"Rate limiting: waiting {wait_time:.1f}s for Anthropic API")
                     time.sleep(wait_time)
@@ -815,6 +816,30 @@ class CRSSummaryExtractor:
             print(f"DEBUG: AI summary failed, falling back to truncated summary: {e}")
             return self.truncate_summary(original_summary, word_limit)
     
+    def _add_formatted_text(self, paragraph, text: str) -> None:
+        """Add text with markdown-style bold formatting to a Word paragraph.
+        
+        Converts **bold** text to actual Word bold formatting.
+        
+        Args:
+            paragraph: Word document paragraph object
+            text: Text with potential **bold** markdown formatting
+        """
+        import re
+        
+        # Split text by **bold** patterns
+        parts = re.split(r'\*\*(.*?)\*\*', text)
+        
+        for i, part in enumerate(parts):
+            if not part:  # Skip empty parts
+                continue
+                
+            if i % 2 == 0:  # Regular text (even indices)
+                paragraph.add_run(part)
+            else:  # Bold text (odd indices - content between **)
+                bold_run = paragraph.add_run(part)
+                bold_run.bold = True
+
     def truncate_summary(self, summary: Optional[str], word_limit: int = 300) -> str:
         """Truncate summary to specified word limit with safe handling.
         
@@ -1046,7 +1071,7 @@ class CRSSummaryExtractor:
         
         total_reports = len(reports_needing_summaries)
         print(f"Generating AI summaries for {total_reports} reports using {self.anthropic_max_concurrent} parallel workers...")
-        print("Note: Processing optimized for Anthropic's 30,000 input tokens/minute limit")
+        print("Note: Conservative rate limiting to minimize truncated summaries")
         
         completed_count = 0
         
@@ -1301,10 +1326,10 @@ class CRSSummaryExtractor:
             subheading_run.bold = True
             subheading_run.font.size = Inches(0.12)  # Slightly smaller than normal
         
-        # Add summary as body text
+        # Add summary as body text with proper bold formatting
         if summary:
             summary_para = doc.add_paragraph()
-            summary_para.add_run(summary)
+            self._add_formatted_text(summary_para, summary)
         
         # Add ID and URL in italics at the end
         metadata_parts = []
